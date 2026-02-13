@@ -20,37 +20,16 @@ const AdminDashboard = () => {
         analytics: [],
         statusAnalytics: [],
         districtAnalytics: [],
-        recentLogs: []
+        recentLogs: [],
+        abnormalRegistrations: [],
+        abnormalTransfers: [],
+        riskDistribution: []
     });
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('summary');
 
     const COLORS = ['#0891b2', '#4f46e5', '#059669', '#e11d48', '#d97706'];
     const RISK_COLORS = { 'Low Risk': '#0891b2', 'Medium Risk': '#d97706', 'High Risk': '#e11d48', 'Critical': '#7c3aed' };
-
-    // Dummy anomaly data — will be replaced by GET /api/registrar/anomaly-metrics
-    const abnormalRegistrations = [
-        { month: 'Jan', anomalies: 4 },
-        { month: 'Feb', anomalies: 7 },
-        { month: 'Mar', anomalies: 2 },
-        { month: 'Apr', anomalies: 11 },
-        { month: 'May', anomalies: 6 },
-        { month: 'Jun', anomalies: 15 },
-        { month: 'Jul', anomalies: 22 },
-    ];
-    const abnormalTransfers = [
-        { region: 'North', flagged: 12 },
-        { region: 'South', flagged: 5 },
-        { region: 'East', flagged: 28 },
-        { region: 'West', flagged: 9 },
-        { region: 'Central', flagged: 3 },
-    ];
-    const riskDistribution = [
-        { name: 'Low Risk', value: 42 },
-        { name: 'Medium Risk', value: 28 },
-        { name: 'High Risk', value: 18 },
-        { name: 'Critical', value: 7 },
-    ];
 
     useEffect(() => {
         fetchDashboard();
@@ -370,7 +349,7 @@ const AdminDashboard = () => {
                                     </div>
                                     <div className="h-[350px] w-full">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart data={abnormalRegistrations}>
+                                            <LineChart data={stats.abnormalRegistrations}>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                                 <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 800, fill: '#94a3b8' }} dy={10} />
                                                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 800, fill: '#94a3b8' }} allowDecimals={false} />
@@ -395,7 +374,7 @@ const AdminDashboard = () => {
                                     </div>
                                     <div className="h-[350px] w-full">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <BarChart data={abnormalTransfers}>
+                                            <BarChart data={stats.abnormalTransfers}>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                                 <XAxis dataKey="region" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 800, fill: '#94a3b8' }} dy={10} />
                                                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 800, fill: '#94a3b8' }} allowDecimals={false} />
@@ -405,7 +384,7 @@ const AdminDashboard = () => {
                                                     itemStyle={{ fontSize: '10px', fontWeight: 900, textTransform: 'uppercase' }}
                                                 />
                                                 <Bar dataKey="flagged" name="Flagged Transfers" fill="#d97706" radius={[16, 16, 0, 0]} barSize={50} animationDuration={2000}>
-                                                    {abnormalTransfers.map((_, index) => (
+                                                    {(stats.abnormalTransfers || []).map((_, index) => (
                                                         <Cell key={`at-${index}`} fill={COLORS[index % COLORS.length]} />
                                                     ))}
                                                 </Bar>
@@ -426,7 +405,7 @@ const AdminDashboard = () => {
                                         <ResponsiveContainer width="100%" height="100%">
                                             <PieChart>
                                                 <Pie
-                                                    data={riskDistribution}
+                                                    data={stats.riskDistribution}
                                                     cx="50%" cy="50%"
                                                     innerRadius={80} outerRadius={130}
                                                     paddingAngle={4}
@@ -434,7 +413,7 @@ const AdminDashboard = () => {
                                                     label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                                                     animationDuration={2000}
                                                 >
-                                                    {riskDistribution.map((entry, index) => (
+                                                    {(stats.riskDistribution || []).map((entry, index) => (
                                                         <Cell key={`risk-${index}`} fill={RISK_COLORS[entry.name] || COLORS[index]} />
                                                     ))}
                                                 </Pie>

@@ -7,7 +7,7 @@ import Property from '../models/Properties.js';
 import Dispute from '../models/Dispute.js';
 import OfficeConfig from '../models/Office.js';
 import { AuditService } from '../services/auditService.js';
-
+import Application from '../models/Application.js';
 import AuditLog from '../models/AuditLog.js';
 
 const router = Router();
@@ -17,7 +17,14 @@ const router = Router();
  */
 router.get('/dashboard', requireAuth(['admin']), async (req, res) => {
     try {
-        const [userCounts, propertiesCount, disputesCount, propertyStats, propertyStatusStats, totalValuation, districtStats, recentLogs] = await Promise.all([
+
+        const [
+            userCounts, propertiesCount, disputesCount,
+            propertyStats, propertyStatusStats, totalValuation,
+            districtStats, recentLogs,
+            // Anomaly queries
+            rejectedAppsByMonth, disputedByDistrict, applicationStatusCounts
+        ] = await Promise.all([
             User.aggregate([
                 { $group: { _id: '$role', count: { $sum: 1 } } }
             ]),
@@ -60,7 +67,45 @@ router.get('/dashboard', requireAuth(['admin']), async (req, res) => {
                 .sort({ timestamp: -1 })
                 .limit(5)
                 .populate('userId', 'name email')
-                .lean()
+                .lean(),
+
+            // ── Anomaly: Rejected/flagged applications per month (past 12 months) ──
+            Application.aggregate([
+                {
+                    $match: {
+                        status: { $in: ['rejected'] },
+                        createdAt: { $gte: new Date(new Date().setMonth(new Date().getMonth() - 12)) }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            month: { $month: '$createdAt' },
+                            year: { $year: '$createdAt' }
+                        },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { '_id.year': 1, '_id.month': 1 } }
+            ]),
+
+            // ── Anomaly: Disputed + Rejected properties by district ──
+            Property.aggregate([
+                { $match: { status: { $in: ['disputed', 'rejected'] } } },
+                {
+                    $group: {
+                        _id: '$address.district',
+                        flagged: { $sum: 1 }
+                    }
+                },
+                { $sort: { flagged: -1 } },
+                { $limit: 10 }
+            ]),
+
+            // ── Risk distribution: count applications by status ──
+            Application.aggregate([
+                { $group: { _id: '$status', count: { $sum: 1 } } }
+            ])
         ]);
 
         const usersByRole = userCounts.reduce((acc, curr) => {
@@ -84,6 +129,41 @@ router.get('/dashboard', requireAuth(['admin']), async (req, res) => {
             count: s.count
         }));
 
+        // ── Build anomaly response data ──
+        console.log('[DASH DEBUG] rejectedAppsByMonth:', JSON.stringify(rejectedAppsByMonth));
+        console.log('[DASH DEBUG] disputedByDistrict:', JSON.stringify(disputedByDistrict));
+        console.log('[DASH DEBUG] applicationStatusCounts:', JSON.stringify(applicationStatusCounts));
+
+        // 1. Abnormal registrations over time (rejected apps per month)
+        const abnormalRegistrations = rejectedAppsByMonth.map(s => ({
+            month: `${months[s._id.month - 1]} ${s._id.year}`,
+            anomalies: s.count
+        }));
+
+        // 2. Abnormal transfers per region (disputed/rejected properties by district)
+        const abnormalTransfers = disputedByDistrict.map(s => ({
+            region: s._id || 'Unknown',
+            flagged: s.flagged
+        }));
+
+        // 3. Risk distribution mapped from application statuses
+        const riskMap = {
+            'pending': 'Low Risk',
+            'under-review': 'Medium Risk',
+            'rejected': 'High Risk',
+            'approved': 'Low Risk'
+        };
+        const riskAgg = {};
+        applicationStatusCounts.forEach(s => {
+            const label = riskMap[s._id] || 'Medium Risk';
+            riskAgg[label] = (riskAgg[label] || 0) + s.count;
+        });
+        // Also blend in disputed properties as Critical
+        const disputedTotal = disputedByDistrict.reduce((sum, d) => sum + d.flagged, 0);
+        if (disputedTotal > 0) riskAgg['Critical'] = (riskAgg['Critical'] || 0) + disputedTotal;
+
+        const riskDistribution = Object.entries(riskAgg).map(([name, value]) => ({ name, value }));
+
         res.json({
             users: usersByRole,
             totalUsers: Object.values(usersByRole).reduce((a, b) => a + b, 0),
@@ -93,9 +173,14 @@ router.get('/dashboard', requireAuth(['admin']), async (req, res) => {
             analytics,
             statusAnalytics: propertyStatusAnalytics,
             districtAnalytics,
-            recentLogs
+            recentLogs,
+            // Anomaly analytics
+            abnormalRegistrations,
+            abnormalTransfers,
+            riskDistribution
         });
     } catch (error) {
+        console.error('Dashboard error:', error);
         res.status(500).json({ error: 'Failed to load dashboard' });
     }
 });
@@ -467,7 +552,7 @@ router.get('/config/approval-settings', requireAuth(['admin']), async (req, res)
  */
 router.get('/applications/approval-stats', requireAuth(['admin']), async (req, res) => {
     try {
-        const Application = (await import('../models/Application.js')).default;
+        // Application already imported at top of file
 
         const [
             totalApplications,
