@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { ethers } from 'ethers';
 import QRCode from 'qrcode';
+import { BACKEND_URL } from '../config/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import Application from '../models/Application.js';
 import Property from '../models/Properties.js';
@@ -24,28 +25,28 @@ router.get('/dashboard', requireAuth(['registrar', 'admin']), async (req, res) =
         const userId = req.user.sub; // This is a string from JWT
         const config = await OfficeConfig.findOne({ officeId: 'default-office' });
         const multiStepEnabled = config?.configData?.multiStepApproval?.enabled ?? true;
-        
+
         let pendingApps;
         if (multiStepEnabled) {
             // Count applications needing THIS registrar's approval
             const apps = await Application.find({
                 status: { $in: ['pending', 'under-review'] }
             }).lean();
-            
+
             pendingApps = apps.filter(app => {
                 if (!app.approvals || app.approvals.length === 0) return true;
                 return !app.approvals.some(a => {
-                    const rid = a.registrarId?.toString?.() || 
-                               (typeof a.registrarId === 'string' ? a.registrarId : null);
+                    const rid = a.registrarId?.toString?.() ||
+                        (typeof a.registrarId === 'string' ? a.registrarId : null);
                     return rid === userId && a.decision === 'approved';
                 });
             }).length;
         } else {
             pendingApps = await Application.countDocuments({ status: 'pending' });
         }
-        
+
         const fraudAlerts = await Property.countDocuments({ status: 'disputed' });
-        
+
         res.json({
             pendingApplications: pendingApps,
             fraudAlerts
@@ -95,53 +96,53 @@ router.get('/inbox', requireAuth(['registrar', 'admin']), async (req, res) => {
             console.log(`[INBOX] Filtering applications for registrar ${userIdStr}`);
             console.log(`[INBOX] req.user.sub type: ${typeof userId}, value: ${userIdStr}`);
             console.log(`[INBOX] Found ${allApplications.length} total applications with status pending/under-review`);
-            
+
             allApplications = allApplications.filter(app => {
                 // If no approvals, show it
                 if (!app.approvals || app.approvals.length === 0) {
                     console.log(`[INBOX] Application ${app.appId} has no approvals - showing`);
                     return true;
                 }
-                
+
                 // Check if this registrar has already approved
                 const alreadyApproved = app.approvals.some(approval => {
                     if (!approval.registrarId) {
                         console.log(`[INBOX] Application ${app.appId} has approval without registrarId`);
                         return false;
                     }
-                    
+
                     // Normalize both to strings for comparison
                     // When using .lean(), registrarId might be ObjectId object or string
-                    const approvalRegistrarId = approval.registrarId?.toString?.() || 
-                                               (typeof approval.registrarId === 'string' ? approval.registrarId : null);
-                    
+                    const approvalRegistrarId = approval.registrarId?.toString?.() ||
+                        (typeof approval.registrarId === 'string' ? approval.registrarId : null);
+
                     console.log(`[INBOX] Application ${app.appId} approval registrarId type: ${typeof approval.registrarId}, normalized: ${approvalRegistrarId}`);
-                    
+
                     if (!approvalRegistrarId) {
                         return false;
                     }
-                    
+
                     const matches = approvalRegistrarId === userIdStr && approval.decision === 'approved';
                     if (matches) {
                         console.log(`[INBOX] Filtering out application ${app.appId} - already approved by registrar ${userIdStr} (approval registrarId: ${approvalRegistrarId})`);
                     }
                     return matches;
                 });
-                
+
                 if (!alreadyApproved) {
                     console.log(`[INBOX] Application ${app.appId} needs approval - showing to registrar ${userIdStr}`);
                 }
-                
+
                 return !alreadyApproved;
             });
-            
+
             console.log(`[INBOX] After filtering, ${allApplications.length} applications visible to registrar ${userIdStr}`);
         }
 
         // NOW apply pagination after filtering
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const applications = allApplications.slice(skip, skip + parseInt(limit));
-        
+
         // Count total matching applications (after filtering)
         const total = allApplications.length;
 
@@ -287,7 +288,7 @@ async function finalizeApprovalAndRegister(application, userId, user, req) {
     };
 
     await application.save();
-    
+
     console.log(`[APPROVAL] Application ${application.appId} finalized and set to 'approved' status`);
 
     // Log final approval
@@ -402,12 +403,12 @@ router.post('/application/:appId/approve', requireAuth(['registrar', 'admin']), 
             registrarName: user.name,
             registrarEmail: user.email
         };
-        
+
         application.approvals.push(newApproval);
-        
+
         // Mark the approvals array as modified to ensure it's saved
         application.markModified('approvals');
-        
+
         console.log(`[APPROVAL] Added approval for application ${application.appId} by registrar ${userId} (${user.name})`);
         console.log(`[APPROVAL] userId type: ${typeof userId}, value: ${userId}`);
         console.log(`[APPROVAL] newApproval.registrarId type: ${typeof newApproval.registrarId}, value: ${newApproval.registrarId}`);
@@ -416,7 +417,7 @@ router.post('/application/:appId/approve', requireAuth(['registrar', 'admin']), 
         const currentApprovedCount = application.approvals.filter(
             a => a.decision === 'approved'
         ).length;
-        
+
         console.log(`[APPROVAL] Current approval count: ${currentApprovedCount}, approvals array length: ${application.approvals.length}`);
 
         // Update approval metadata
@@ -429,14 +430,14 @@ router.post('/application/:appId/approve', requireAuth(['registrar', 'admin']), 
                 rejectedCount: 0
             };
         }
-        
+
         application.approvalMetadata.approvedCount = currentApprovedCount;
         application.markModified('approvalMetadata');
 
         // IMPORTANT: Update status to 'under-review' if threshold NOT met
         // Only set to 'approved' AFTER blockchain registration (in finalizeApprovalAndRegister)
         const requiredApprovals = application.approvalMetadata.requiredApprovals || 2;
-        
+
         if (currentApprovedCount < requiredApprovals) {
             // Threshold not met - set to under-review
             application.status = 'under-review';
@@ -447,7 +448,7 @@ router.post('/application/:appId/approve', requireAuth(['registrar', 'admin']), 
 
         // Save the application
         await application.save();
-        
+
         // Verify the save worked by checking the database directly
         const verifyApp = await Application.findById(application._id).lean();
         console.log(`[APPROVAL] Saved application ${application.appId}:`);
@@ -467,19 +468,19 @@ router.post('/application/:appId/approve', requireAuth(['registrar', 'admin']), 
         // Reload to ensure we have the latest state from database
         const updatedApp = await Application.findById(application._id)
             .populate('approvals.registrarId', 'name email');
-        
+
         console.log(`[APPROVAL] Reloaded application ${application.appId}, approvals count: ${updatedApp.approvals?.length || 0}`);
         if (updatedApp.approvals && updatedApp.approvals.length > 0) {
             updatedApp.approvals.forEach((approval, idx) => {
                 console.log(`[APPROVAL] Approval ${idx}: registrarId=${approval.registrarId}, decision=${approval.decision}`);
             });
         }
-        
+
         // Recalculate from reloaded data to be absolutely sure
         const verifiedApprovedCount = updatedApp.approvals?.filter(
             a => a.decision === 'approved'
         ).length || 0;
-        
+
         console.log(`[APPROVAL] Verified approval count: ${verifiedApprovedCount}`);
 
         // Double-check status is correct
@@ -507,28 +508,28 @@ router.post('/application/:appId/approve', requireAuth(['registrar', 'admin']), 
 
         // Check if threshold met using verified count from database
         const thresholdMet = verifiedApprovedCount >= application.approvalMetadata.requiredApprovals;
-        
+
         console.log(`[APPROVAL] Threshold check for ${application.appId}: ${verifiedApprovedCount} >= ${application.approvalMetadata.requiredApprovals} = ${thresholdMet}`);
 
         if (thresholdMet) {
             console.log(`[APPROVAL] Threshold met! Finalizing approval for ${application.appId}`);
-            
+
             // Reload full application for final approval
             const appForFinal = await Application.findById(application._id).populate('applicantId');
-            
+
             // Double-check status before finalizing
             if (appForFinal.status !== 'under-review' && appForFinal.status !== 'pending') {
                 console.error(`[APPROVAL] ERROR: Application ${application.appId} status is ${appForFinal.status}, expected under-review or pending`);
-                return res.status(400).json({ 
-                    error: `Application status is ${appForFinal.status}, cannot finalize approval` 
+                return res.status(400).json({
+                    error: `Application status is ${appForFinal.status}, cannot finalize approval`
                 });
             }
-            
+
             // Trigger final approval and blockchain registration
             const result = await finalizeApprovalAndRegister(appForFinal, userId, user, req);
-            
+
             console.log(`[APPROVAL] Successfully finalized ${application.appId} with property ${result.propertyId}`);
-            
+
             return res.json({
                 message: 'Application fully approved and property registered on blockchain',
                 status: 'approved',
@@ -551,7 +552,7 @@ router.post('/application/:appId/approve', requireAuth(['registrar', 'admin']), 
 
         // Threshold not met yet - application remains in 'under-review' status
         console.log(`[APPROVAL] Partial approval recorded for ${application.appId}: ${verifiedApprovedCount}/${application.approvalMetadata.requiredApprovals}`);
-        
+
         res.json({
             message: 'Approval recorded successfully',
             status: updatedAppLean.status || 'under-review',
@@ -797,25 +798,8 @@ router.post('/certificate/:propertyId', requireAuth(['registrar', 'admin']), asy
             return res.status(404).json({ error: 'Property not found' });
         }
 
-        // 1. Determine the verification (QR) URL (Mobile friendly)
-        let host = process.env.PUBLIC_BASE || 'http://localhost:8081';
-        if (host.includes('localhost') || host.includes('127.0.0.1')) {
-            const interfaces = os.networkInterfaces();
-            let localIp = 'localhost';
-            for (const name of Object.keys(interfaces)) {
-                for (const iface of interfaces[name]) {
-                    if (iface.family === 'IPv4' && !iface.internal) {
-                        localIp = iface.address;
-                        break;
-                    }
-                }
-            }
-            host = `http://${localIp}:5173`;
-        } else {
-            host = process.env.FRONTEND_ORIGIN || host;
-        }
-
-        const verifyUrl = `${host.replace(/\/$/, '')}/certificate/${encodeURIComponent(propertyId)}`;
+        // 1. Determine the verification (QR) URL -> points to static backend PDF
+        const verifyUrl = `${BACKEND_URL.replace(/\/$/, '')}/certificates/${encodeURIComponent(propertyId)}.pdf`;
 
         // 2. Enrich property with blockchain data for the PDF
         const chainData = await BlockchainService.getProperty(propertyId);
