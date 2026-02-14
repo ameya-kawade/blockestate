@@ -15,6 +15,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STORAGE_DIR = path.join(__dirname, '../storage/certificates');
 
+console.log(STORAGE_DIR);
+
+
 // Helper to get status label
 function statusLabel(n) {
   return Number(n) === 1 ? 'DISPUTED' : 'CLEAR';

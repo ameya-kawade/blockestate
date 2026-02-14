@@ -14,6 +14,9 @@ import { AuditService } from '../services/auditService.js';
 import { PdfService } from '../services/pdfService.js';
 import { sha256Hex } from '../utils/hash.js';
 import os from 'os';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const router = Router();
 
@@ -273,6 +276,51 @@ async function finalizeApprovalAndRegister(application, userId, user, req) {
     });
 
     await property.save();
+
+    // Auto-generate certificate PDF and save to filesystem + MongoDB
+    try {
+        const enrichedProp = property.toObject();
+        enrichedProp.chain = {
+            txHash,
+            blockNumber: receipt.blockNumber,
+            contractAddress: process.env.CONTRACT_ADDRESS || '0x...'
+        };
+
+        const verifyUrl = `${BACKEND_URL.replace(/\/$/, '')}/certificates/${encodeURIComponent(propertyId)}.pdf`;
+        const pdfBuffer = await PdfService.generateCertificate(enrichedProp, verifyUrl);
+        const certDocHash = sha256Hex(pdfBuffer);
+
+        // Save to MongoDB
+        await Certificate.findOneAndUpdate(
+            { propertyId },
+            {
+                generatedBy: userId,
+                docHash: '0x' + certDocHash,
+                qrUrl: verifyUrl,
+                pdfData: pdfBuffer,
+                fileName: `Certificate_${propertyId}.pdf`,
+                status: 'active'
+            },
+            { upsert: true, new: true }
+        );
+
+        // Save to filesystem for static serving
+        const __certFilename = fileURLToPath(import.meta.url);
+        const __certDirname = path.dirname(__certFilename);
+        const CERT_DIR = path.join(__certDirname, '../storage/certificates');
+        if (!fs.existsSync(CERT_DIR)) fs.mkdirSync(CERT_DIR, { recursive: true });
+        fs.writeFileSync(path.join(CERT_DIR, `${propertyId}.pdf`), pdfBuffer);
+
+        // Update property with certificate metadata
+        property.certificateUrl = verifyUrl;
+        property.qrData = { lastGeneratedAt: new Date(), docHash: '0x' + certDocHash };
+        await property.save();
+
+        console.log(`[CERT] Auto-generated certificate for ${propertyId} → storage/certificates/${propertyId}.pdf`);
+    } catch (certErr) {
+        console.error(`[CERT] Failed to auto-generate certificate for ${propertyId}:`, certErr);
+        // Non-fatal — property is still registered even if cert generation fails
+    }
 
     // Update application - ONLY set to 'approved' after successful blockchain registration
     application.status = 'approved';
@@ -828,6 +876,18 @@ router.post('/certificate/:propertyId', requireAuth(['registrar', 'admin']), asy
             },
             { upsert: true, new: true }
         );
+
+        // 5b. Save to filesystem for static serving
+        try {
+            const __certFilename = fileURLToPath(import.meta.url);
+            const __certDirname = path.dirname(__certFilename);
+            const CERT_DIR = path.join(__certDirname, '../storage/certificates');
+            if (!fs.existsSync(CERT_DIR)) fs.mkdirSync(CERT_DIR, { recursive: true });
+            fs.writeFileSync(path.join(CERT_DIR, `${propertyId}.pdf`), pdfBuffer);
+            console.log(`[CERT] Saved certificate PDF to storage/certificates/${propertyId}.pdf`);
+        } catch (fsErr) {
+            console.error('[CERT] Failed to save certificate PDF to filesystem:', fsErr);
+        }
 
         // 5. Update Property metadata
         property.certificateUrl = verifyUrl;

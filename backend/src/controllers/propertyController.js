@@ -11,6 +11,7 @@ import Certificate from '../models/Certificate.js';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 function getLocalIp() {
   const interfaces = os.networkInterfaces();
@@ -191,6 +192,18 @@ export const PropertyController = {
         },
         { upsert: true, new: true }
       );
+
+      // 3b. Save to filesystem for static serving
+      try {
+        const __certFilename = fileURLToPath(import.meta.url);
+        const __certDirname = path.dirname(__certFilename);
+        const CERT_DIR = path.join(__certDirname, '../storage/certificates');
+        if (!fs.existsSync(CERT_DIR)) fs.mkdirSync(CERT_DIR, { recursive: true });
+        fs.writeFileSync(path.join(CERT_DIR, `${id}.pdf`), pdfBuffer);
+        console.log(`[CERT] Saved certificate PDF to storage/certificates/${id}.pdf`);
+      } catch (fsErr) {
+        console.error('[CERT] Failed to save certificate PDF to filesystem:', fsErr);
+      }
 
       // 4. Update property record metadata
       await Property.updateOne({ propertyId: id }, {
